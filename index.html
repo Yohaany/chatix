@@ -1,2 +1,217 @@
-const SOCKET_SERVER_URL = 'http://p90346c1.beget.tech/'; 
-const socket = io(SOCKET_SERVER_URL);
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Web Messenger (Client)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+    <style>
+        /* Убираем скроллбар для красоты */
+        ::-webkit-scrollbar { width: 0px; background: transparent; }
+    </style>
+</head>
+<body class="bg-gray-100 h-screen overflow-hidden">
+
+<div id="app" class="h-full flex flex-col max-w-md mx-auto bg-white shadow-xl relative">
+
+    <div v-if="!registered" class="flex flex-col justify-center items-center h-full p-6">
+        <h1 class="text-2xl font-bold mb-6 text-blue-600">Messenger 💬</h1>
+        <input v-model="usernameInput" placeholder="@username" class="w-full p-3 border rounded-lg mb-4 text-lg focus:outline-blue-500">
+        <button @click="register" class="w-full bg-blue-600 text-white p-3 rounded-lg font-bold active:bg-blue-700 transition">
+            Войти и начать
+        </button>
+    </div>
+
+    <div v-else-if="!activeChat" class="flex flex-col h-full">
+        <div class="bg-white p-4 border-b flex justify-between items-center sticky top-0 z-10">
+            <span class="font-bold text-lg text-gray-800">{{ myUsername }}</span>
+            <button @click="showCreateModal = true" class="text-blue-600 font-semibold text-2xl">+</button>
+        </div>
+
+        <div class="flex-1 overflow-y-auto p-2">
+            <div v-if="myChats.length === 0" class="text-center text-gray-400 mt-10">
+                Нет чатов. Нажми +, чтобы начать.
+            </div>
+            <div v-for="chat in myChats" :key="chat.id" @click="openChat(chat)" class="bg-white p-4 mb-2 rounded-lg shadow-sm border flex items-center cursor-pointer active:bg-gray-50">
+                <div class="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center text-blue-600 font-bold mr-3">
+                    {{ chat.type === 'group' ? 'G' : chat.name ? chat.name[1].toUpperCase() : '?' }}
+                </div>
+                <div>
+                    <div class="font-bold text-gray-800">{{ chat.name }}</div>
+                    <div class="text-sm text-gray-500 truncate w-48">
+                        {{ chat.messages.length ? chat.messages[chat.messages.length-1].text : 'Начните беседу' }}
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div v-if="showCreateModal" class="absolute inset-0 bg-white z-20 flex flex-col">
+            <div class="p-4 border-b flex items-center">
+                <button @click="showCreateModal = false; selectedUsers = []" class="text-gray-500 mr-4">Отмена</button>
+                <h2 class="font-bold text-lg">Новый чат</h2>
+            </div>
+            <div class="p-2 flex-1 overflow-y-auto">
+                <div class="text-sm text-gray-400 mb-2 px-2">Выберите участников (онлайн):</div>
+                <div v-for="user in otherUsers" :key="user" class="flex items-center p-3 border-b">
+                    <input type="checkbox" :value="user" v-model="selectedUsers" class="w-5 h-5 mr-3 accent-blue-600">
+                    <span class="text-lg">{{ user }}</span>
+                </div>
+            </div>
+            <div class="p-4 border-t bg-gray-50">
+                <button @click="createChat" :disabled="selectedUsers.length === 0" 
+                    class="w-full bg-blue-600 text-white p-3 rounded-lg font-bold disabled:bg-gray-300">
+                    {{ selectedUsers.length > 1 ? 'Создать группу' : 'Начать беседу' }}
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <div v-else class="flex flex-col h-full">
+        <div class="bg-white p-3 border-b flex items-center shadow-sm z-10">
+            <button @click="activeChat = null" class="mr-3 text-gray-600">
+                <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"></path></svg>
+            </button>
+            <div class="flex flex-col">
+                <span class="font-bold text-gray-800 leading-tight">{{ activeChat.name }}</span>
+                <span class="text-xs text-gray-500">{{ activeChat.participants.length }} уч.</span>
+            </div>
+        </div>
+
+        <div class="flex-1 overflow-y-auto p-4 space-y-3 bg-gray-50" id="messagesContainer">
+            <div v-for="(msg, idx) in activeChat.messages" :key="idx" 
+                 :class="['flex flex-col max-w-[80%]', msg.sender === myUsername ? 'self-end items-end' : 'self-start items-start']">
+                <span v-if="activeChat.type === 'group' && msg.sender !== myUsername" class="text-xs text-gray-400 ml-1 mb-1">{{ msg.sender }}</span>
+                <div :class="['p-3 rounded-2xl text-sm shadow-sm', msg.sender === myUsername ? 'bg-blue-600 text-white rounded-br-none' : 'bg-white border text-gray-800 rounded-bl-none']">
+                    {{ msg.text }}
+                </div>
+                <span class="text-[10px] text-gray-400 mt-1 px-1">{{ msg.time }}</span>
+            </div>
+        </div>
+
+        <div class="p-3 bg-white border-t flex items-center">
+            <input v-model="messageText" @keyup.enter="sendMessage" placeholder="Сообщение..." class="flex-1 bg-gray-100 p-3 rounded-full focus:outline-none border border-transparent focus:border-blue-300 mr-2">
+            <button @click="sendMessage" class="bg-blue-600 text-white p-3 rounded-full shadow-lg hover:bg-blue-700">
+                <svg class="w-5 h-5 rotate-90" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"></path></svg>
+            </button>
+        </div>
+    </div>
+
+</div>
+
+<script>
+    const { createApp } = Vue;
+
+    // ⭐️ АДРЕС ВАШЕГО СЕРВЕРА НА RENDER: 
+    const SOCKET_SERVER_URL = 'https://chatserver-s05w.onrender.com';
+    const socket = io(SOCKET_SERVER_URL);
+
+    createApp({
+        data() {
+            return {
+                registered: false,
+                usernameInput: '',
+                myUsername: '',
+                allUsers: [], // Все юзеры онлайн
+                chats: [],
+                activeChat: null,
+                showCreateModal: false,
+                selectedUsers: [], // Кого выбрали для нового чата
+                messageText: ''
+            }
+        },
+        computed: {
+            // Фильтруем список юзеров (исключая себя)
+            otherUsers() {
+                return this.allUsers.filter(u => u !== this.myUsername);
+            },
+            // Фильтруем только те чаты, где я есть
+            myChats() {
+                return this.chats.filter(c => c.participants.includes(this.myUsername));
+            }
+        },
+        mounted() {
+            // Слушаем события от сервера
+            socket.on('registered', (data) => {
+                this.myUsername = data.username;
+                this.registered = true;
+                this.allUsers = data.allUsers;
+            });
+
+            socket.on('update_users', (users) => {
+                this.allUsers = users;
+            });
+
+            socket.on('new_chat', (chat) => {
+                // Избегаем дублирования чатов
+                if (!this.chats.some(c => c.id === chat.id)) {
+                    this.chats.push(chat);
+                }
+            });
+
+            socket.on('update_chat', (updatedChat) => {
+                const idx = this.chats.findIndex(c => c.id === updatedChat.id);
+                if (idx !== -1) {
+                    // Обновляем чат
+                    this.chats[idx] = updatedChat;
+                    // Если этот чат сейчас открыт, обновляем его и скроллим
+                    if (this.activeChat && this.activeChat.id === updatedChat.id) {
+                        this.activeChat = updatedChat;
+                        this.$nextTick(() => this.scrollToBottom());
+                    }
+                }
+            });
+
+             // Обработка возможного разрыва соединения (например, при "сне" Render)
+            socket.on('disconnect', () => {
+                console.log('Соединение с сервером потеряно.');
+                // Можно добавить уведомление для пользователя
+            });
+
+            socket.on('connect', () => {
+                 console.log('Соединение с сервером восстановлено.');
+                 // При восстановлении соединения можно перерегистрироваться, 
+                 // чтобы сервер обновил список онлайн-пользователей
+                 if (this.myUsername) {
+                    socket.emit('register', this.myUsername);
+                 }
+            });
+
+        },
+        methods: {
+            register() {
+                if(this.usernameInput.trim()) {
+                    // Убираем лишние символы @, если есть
+                    let username = this.usernameInput.trim().startsWith('@') 
+                                 ? this.usernameInput.trim() 
+                                 : '@' + this.usernameInput.trim();
+                    
+                    socket.emit('register', username);
+                }
+            },
+            createChat() {
+                if (this.selectedUsers.length === 0) return;
+                socket.emit('create_chat', this.selectedUsers);
+                this.selectedUsers = [];
+                this.showCreateModal = false;
+            },
+            openChat(chat) {
+                this.activeChat = chat;
+                this.$nextTick(() => this.scrollToBottom());
+            },
+            sendMessage() {
+                if(!this.messageText.trim()) return;
+                socket.emit('send_message', { chatId: this.activeChat.id, text: this.messageText });
+                this.messageText = '';
+            },
+            scrollToBottom() {
+                // Автоматическая прокрутка к последнему сообщению
+                const container = document.getElementById('messagesContainer');
+                if(container) container.scrollTop = container.scrollHeight;
+            }
+        }
+    }).mount('#app');
+</script>
+</body>
+</html>
